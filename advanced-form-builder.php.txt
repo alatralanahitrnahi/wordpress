@@ -1,0 +1,346 @@
+<?php
+/**
+ * Plugin Name: Advanced Form Builder
+ * Plugin URI: https://example.com/plugins/advanced-form-builder
+ * Description: A comprehensive form builder plugin with entry management.
+ * Version: 2.0.1
+ * Author: Lemmecode India
+ * Author URI: https://example.com
+ * License: GPL v2 or later
+ * License URI: https://www.gnu.org/licenses/gpl-2.0.html
+ * Text Domain: advanced-form-builder
+ */
+
+if (!defined('WPINC')) {
+    die;
+}
+
+// Create database tables on plugin activation
+function afb_create_tables() {
+    global $wpdb;
+    $charset_collate = $wpdb->get_charset_collate();
+
+    // Forms table
+    $forms_table = $wpdb->prefix . 'afb_forms';
+    $forms_sql = "CREATE TABLE IF NOT EXISTS $forms_table (
+        id mediumint(9) NOT NULL AUTO_INCREMENT,
+        form_title varchar(255) NOT NULL,
+        form_fields longtext NOT NULL,
+        created_at datetime DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY  (id)
+    ) $charset_collate;";
+
+    // Entries table
+    $entries_table = $wpdb->prefix . 'afb_entries';
+    $entries_sql = "CREATE TABLE IF NOT EXISTS $entries_table (
+        id mediumint(9) NOT NULL AUTO_INCREMENT,
+        form_id mediumint(9) NOT NULL,
+        entry_data longtext NOT NULL,
+        user_ip varchar(100),
+        created_at datetime DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY  (id),
+        KEY form_id (form_id)
+    ) $charset_collate;";
+
+    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+    dbDelta($forms_sql);
+    dbDelta($entries_sql);
+}
+register_activation_hook(__FILE__, 'afb_create_tables');
+
+// Admin menu setup
+function afb_admin_menu() {
+    add_menu_page('Advanced Form Builder', 'AF Builder', 'manage_options', 'af-builder', 'afb_forms_page', 'dashicons-feedback', 30);
+    add_submenu_page('af-builder', 'All Forms', 'All Forms', 'manage_options', 'af-builder', 'afb_forms_page');
+    add_submenu_page('af-builder', 'Add New Form', 'Add New', 'manage_options', 'af-builder-new', 'afb_new_form_page');
+    add_submenu_page('af-builder', 'Form Entries', 'Entries', 'manage_options', 'af-builder-entries', 'afb_entries_page');
+}
+add_action('admin_menu', 'afb_admin_menu');
+
+// All Forms page
+function afb_forms_page() {
+    global $wpdb;
+    $forms_table = $wpdb->prefix . 'afb_forms';
+    $forms = $wpdb->get_results("SELECT * FROM $forms_table ORDER BY created_at DESC");
+    ?>
+    <div class="wrap">
+        <h1>All Forms <a href="?page=af-builder-new" class="page-title-action">Add New</a></h1>
+        <table class="wp-list-table widefat fixed striped">
+            <thead>
+                <tr>
+                    <th>Title</th>
+                    <th>Shortcode</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($forms as $form): ?>
+                <tr>
+                    <td><?php echo esc_html($form->form_title); ?></td>
+                    <td><code>[advanced_form id="<?php echo $form->id; ?>"]</code></td>
+                    <td><?php echo esc_html($form->created_at); ?></td>
+                    <td>
+                        <a href="?page=af-builder-new&edit=<?php echo $form->id; ?>">Edit</a> |
+                        <a href="?page=af-builder-entries&form_id=<?php echo $form->id; ?>">View Entries</a>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <?php
+}
+
+// New/Edit Form page
+function afb_new_form_page() {
+    $edit_id = isset($_GET['edit']) ? intval($_GET['edit']) : 0;
+    $form_data = null;
+    
+    if ($edit_id) {
+        global $wpdb;
+        $forms_table = $wpdb->prefix . 'afb_forms';
+        $form_data = $wpdb->get_row($wpdb->prepare("SELECT * FROM $forms_table WHERE id = %d", $edit_id));
+    }
+    ?>
+    <div class="wrap">
+        <h1><?php echo $edit_id ? 'Edit Form' : 'Create New Form'; ?></h1>
+        <form method="post" action="<?php echo admin_url('admin-post.php'); ?>">
+            <?php wp_nonce_field('afb_save_form', 'afb_nonce'); ?>
+            <input type="hidden" name="action" value="afb_save_form">
+            <?php if ($edit_id): ?>
+            <input type="hidden" name="form_id" value="<?php echo $edit_id; ?>">
+            <?php endif; ?>
+            
+            <table class="form-table">
+                <tr>
+                    <th scope="row"><label for="form_title">Form Title</label></th>
+                    <td>
+                        <input type="text" name="form_title" id="form_title" class="regular-text" 
+                               value="<?php echo $form_data ? esc_attr($form_data->form_title) : ''; ?>" required>
+                    </td>
+                </tr>
+            </table>
+            
+            <div id="form_fields">
+                <?php
+                if ($form_data) {
+                    $fields = json_decode($form_data->form_fields, true);
+                    foreach ($fields as $field) {
+                        // Render existing fields
+                    }
+                }
+                ?>
+            </div>
+            
+            <button type="button" class="button" onclick="addField()">Add Field</button>
+            
+            <p class="submit">
+                <input type="submit" name="submit" class="button button-primary" value="<?php echo $edit_id ? 'Update Form' : 'Save Form'; ?>">
+            </p>
+        </form>
+    </div>
+
+    <script>
+    const fieldTypes = {
+        text: 'Text Input',
+        email: 'Email',
+        tel: 'Phone',
+        number: 'Number',
+        url: 'URL',
+        textarea: 'Paragraph Text',
+        select: 'Dropdown',
+        radio: 'Radio Buttons',
+        checkbox: 'Checkboxes',
+        file: 'File Upload',
+        date: 'Date Picker',
+        time: 'Time Picker'
+    };
+
+    function addField() {
+        const container = document.getElementById('form_fields');
+        const fieldCount = container.children.length;
+        
+        const fieldDiv = document.createElement('div');
+        fieldDiv.className = 'field-row';
+        
+        let typeOptions = '';
+        for (const [value, label] of Object.entries(fieldTypes)) {
+            typeOptions += `<option value="${value}">${label}</option>`;
+        }
+
+        fieldDiv.innerHTML = `
+            <h3>Field ${fieldCount + 1}</h3>
+            <p>
+                <label>Label:</label>
+                <input type="text" name="field_label[]" required>
+            </p>
+            <p>
+                <label>Type:</label>
+                <select name="field_type[]" onchange="toggleOptions(this)">
+                    ${typeOptions}
+                </select>
+            </p>
+            <p class="options-row" style="display: none;">
+                <label>Options:</label>
+                <textarea name="field_options[]" placeholder="One option per line"></textarea>
+            </p>
+            <p>
+                <label>
+                    <input type="checkbox" name="field_required[]">
+                    Required
+                </label>
+            </p>
+            <button type="button" class="button" onclick="this.parentElement.remove()">Remove Field</button>
+        `;
+        
+        container.appendChild(fieldDiv);
+    }
+
+    function toggleOptions(selectEl) {
+        const optionsRow = selectEl.parentElement.nextElementSibling;
+        if (selectEl.value === 'select' || selectEl.value === 'radio' || selectEl.value === 'checkbox') {
+            optionsRow.style.display = 'block';
+        } else {
+            optionsRow.style.display = 'none';
+        }
+    }
+    </script>
+    <?php
+}
+
+// Handle form submission on frontend
+function afb_handle_form_submission() {
+    if (!isset($_POST['afb_form_id']) || !wp_verify_nonce($_POST['afb_nonce'], 'afb_form_submit')) {
+        return;
+    }
+
+    global $wpdb;
+    $form_id = intval($_POST['afb_form_id']);
+    $forms_table = $wpdb->prefix . 'afb_forms';
+    $entries_table = $wpdb->prefix . 'afb_entries';
+    
+    $form = $wpdb->get_row($wpdb->prepare("SELECT * FROM $forms_table WHERE id = %d", $form_id));
+    if (!$form) {
+        return;
+    }
+
+    $fields = json_decode($form->form_fields, true);
+    $entry_data = array();
+    
+    foreach ($fields as $field) {
+        $field_name = sanitize_key($field['label']);
+        if (isset($_POST[$field_name])) {
+            if (is_array($_POST[$field_name])) {
+                $entry_data[$field['label']] = array_map('sanitize_text_field', $_POST[$field_name]);
+            } else {
+                $entry_data[$field['label']] = sanitize_text_field($_POST[$field_name]);
+            }
+        }
+    }
+
+    $wpdb->insert(
+        $entries_table,
+        array(
+            'form_id' => $form_id,
+            'entry_data' => json_encode($entry_data),
+            'user_ip' => $_SERVER['REMOTE_ADDR']
+        ),
+        array('%d', '%s', '%s')
+    );
+
+    // Redirect back to the form page with a success message
+    wp_redirect(add_query_arg('form_submitted', '1', wp_get_referer()));
+    exit;
+}
+add_action('admin_post_nopriv_afb_submit_form', 'afb_handle_form_submission');
+add_action('admin_post_afb_submit_form', 'afb_handle_form_submission');
+
+// Shortcode to display the form
+function afb_form_shortcode($atts) {
+    $atts = shortcode_atts(array('id' => 0), $atts);
+    if (!$atts['id']) return 'Please specify a form ID';
+
+    global $wpdb;
+    $forms_table = $wpdb->prefix . 'afb_forms';
+    $form = $wpdb->get_row($wpdb->prepare("SELECT * FROM $forms_table WHERE id = %d", $atts['id']));
+    if (!$form) return 'Form not found';
+
+    $fields = json_decode($form->form_fields, true);
+    $output = '<div class="afb-form-wrapper">';
+    
+    if (isset($_GET['form_submitted'])) {
+        $output .= '<div class="afb-message afb-success">Form submitted successfully!</div>';
+    }
+    
+    $output .= '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" class="advanced-form" enctype="multipart/form-data">';
+    $output .= wp_nonce_field('afb_form_submit', 'afb_nonce', true, false);
+    $output .= '<input type="hidden" name="action" value="afb_submit_form">';
+    $output .= '<input type="hidden" name="afb_form_id" value="' . $atts['id'] . '">';
+    $output .= '<h2>' . esc_html($form->form_title) . '</h2>';
+
+    foreach ($fields as $field) {
+        $output .= afb_render_field($field);
+    }
+
+    $output .= '<button type="submit">Submit</button>';
+    $output .= '</form></div>';
+
+    return $output;
+}
+add_shortcode('advanced_form', 'afb_form_shortcode');
+
+// Helper function to render form fields
+function afb_render_field($field) {
+    $label = esc_html($field['label']);
+    $type = esc_attr($field['type']);
+    $required = isset($field['required']) ? 'required' : '';
+    
+    $output = "<p><label>{$label}:</label>";
+
+    switch ($type) {
+        case 'text':
+        case 'email':
+        case 'tel':
+        case 'number':
+        case 'url':
+            $output .= "<input type='{$type}' name='" . sanitize_key($label) . "' {$required}>";
+            break;
+
+        case 'textarea':
+            $output .= "<textarea name='" . sanitize_key($label) . "' {$required}></textarea>";
+            break;
+
+        case 'select':
+        case 'radio':
+        case 'checkbox':
+            if (!empty($field['options'])) {
+                $options = explode("\n", $field['options']);
+                foreach ($options as $option) {
+                    $option = trim($option);
+                    if ($type === 'select') {
+                        $output .= "<option value='" . esc_attr($option) . "'>{$option}</option>";
+                    } else {
+                        $output .= "<input type='{$type}' name='" . sanitize_key($label) . "[]' value='" . esc_attr($option) . "'> {$option}<br>";
+                    }
+                }
+                if ($type === 'select') {
+                    $output = "<select name='" . sanitize_key($label) . "' {$required}>" . $output . "</select>";
+                }
+            }
+            break;
+
+        case 'file':
+            $output .= "<input type='file' name='" . sanitize_key($label) . "' {$required}>";
+            break;
+
+        case 'date':
+        case 'time':
+            $output .= "<input type='{$type}' name='" . sanitize_key($label) . "' {$required}>";
+            break;
+    }
+
+    $output .= '</p>';
+    return $output;
+}
+
